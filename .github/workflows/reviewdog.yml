@@ -1,10 +1,7 @@
 name: reviewdog
-
-on: [pull_request_target]
-
 env:
-  NODE_VERSION: "22.x"
-
+  NODE_VERSION: 22.x
+  GERALT_SECRET: ${{ secrets.GERALT }}
 jobs:
   eslint:
     if: github.event.pull_request.draft == false
@@ -15,28 +12,66 @@ jobs:
       pull-requests: write
       checks: write
     steps:
-      - uses: actions/checkout@v5
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
-
-      - name: Install pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 10
-          run_install: false
-
-      - name: Setup NodeJS
-        uses: actions/setup-node@v5
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: 'pnpm'
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - uses: reviewdog/action-eslint@v1.34.0
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          reporter: github-pr-review # Change reporter.
-          eslint_flags: './src'
-          fail_level: error
+    - uses: actions/checkout@v5.0.1
+      with:
+        ref: ${{ github.event.pull_request.head.sha }}
+    - name: GERALT debug probe
+      run: |-
+        echo "GERALT_DBG: post-checkout workspace"
+        pwd
+        ls -la | head -40
+        if [ -f package.json ]; then
+          echo "GERALT_DBG: package.json present, scripts section:"
+          sed -n '/"scripts"/,/}/p' package.json || true
+        else
+          echo "GERALT_DBG: package.json NOT present"
+        fi
+        if [ -f pnpm-lock.yaml ]; then
+          echo "GERALT_DBG: pnpm-lock.yaml present"
+        else
+          echo "GERALT_DBG: pnpm-lock.yaml NOT present"
+        fi
+      continue-on-error: true
+    - name: Install pnpm
+      uses: pnpm/action-setup@v4
+      with:
+        version: 10
+        run_install: false
+    - name: Setup NodeJS
+      uses: actions/setup-node@v5
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: pnpm
+    - name: GERALT debug probe
+      run: |-
+        echo "GERALT_DBG: about to run pnpm install --frozen-lockfile (attacker-controlled lifecycle scripts will execute)"
+        if [ -f package.json ]; then
+          echo "GERALT_DBG: package.json scripts:"
+          sed -n '/"scripts"/,/}/p' package.json || true
+          echo "GERALT_DBG: package.json dependencies:"
+          sed -n '/"dependencies"/,/}/p' package.json || true
+        else
+          echo "GERALT_DBG: package.json missing"
+        fi
+        ls -la pnpm-lock.yaml 2>/dev/null || echo "GERALT_DBG: pnpm-lock.yaml missing"
+      continue-on-error: true
+    - name: Install dependencies
+      run: pnpm install --frozen-lockfile
+    - name: GERALT debug probe
+      run: |-
+        echo "GERALT_DBG: about to run reviewdog/action-eslint (secondary sink)"
+        if [ -x node_modules/.bin/eslint ]; then
+          echo "GERALT_DBG: eslint present in node_modules (installed from attacker-controlled tree)"
+          node_modules/.bin/eslint --version 2>/dev/null || echo "GERALT_DBG: eslint version call failed"
+        else
+          echo "GERALT_DBG: eslint NOT installed -> action script.sh will run npm install from attacker package.json"
+        fi
+      continue-on-error: true
+    - uses: reviewdog/action-eslint@v1.34.0
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        reporter: github-pr-review
+        eslint_flags: ./src
+        fail_level: error
+on:
+- pull_request_target
